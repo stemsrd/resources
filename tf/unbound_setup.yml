@@ -1,0 +1,24 @@
+- become: yes
+  hosts: all
+  name: unbound instance setup
+  tasks:
+    - name: Install unbound
+      yum:
+        name: unbound
+        state: latest
+
+    - name: Enable unbound
+      ansible.builtin.systemd:
+        name: unbound
+        enabled: yes
+        masked: no
+        state: started
+
+    - name: Install amazon-cloudwatch-agent
+      yum:
+        name: amazon-cloudwatch-agent
+        state: latest
+
+    - name: Use cloudwatch config from ssm paramater store
+      ansible.builtin.command: /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c ssm:/cloudwatch-config -s
+

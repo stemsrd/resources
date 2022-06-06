@@ -1,0 +1,190 @@
+---
+- name: pull centos image
+  hosts: localhost
+  tasks:
+  - name: pull the centos:7 image
+    docker_container:
+      container_default_behavior: no_defaults
+      name: "centos-base-image"
+      image: "centos:7"
+      volumes:
+        - /sys/fs/cgroup
+      env:
+        container: "docker"
+      state: started
+      command: /usr/sbin/init
+        
+  - name: add image to ansible hosts
+    add_host:
+      name: "centos-base-image"
+      ansible_connection: docker
+      ansible_ssh_user: root
+
+
+- name: Configure base image for systemd (based on dockerfile cofniguration from https://hub.docker.com/_/centos)
+  hosts: "centos-base-image"
+  gather_facts: false
+  tasks:
+    - name: Delete /lib/systemd/system/sysinit.target.wants/* excluding "systemd-tmpfiles-setup.service"
+      find:
+        paths: /lib/systemd/system/sysinit.target.wants/
+        file_type: link
+        excludes:
+          - "systemd-tmpfiles-setup.service"
+      register: files_to_delete
+
+    - name: delete block
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ files_to_delete.files }}"
+
+    - name: Delete /lib/systemd/system/multi-user.target.wants/*
+      find:
+        paths: /lib/systemd/system/multi-user.target.wants/
+        file_type: link
+      register: files_to_delete
+
+    - name: delete block
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ files_to_delete.files }}"
+
+    - name: Delete /etc/systemd/system/*.wants/*
+      find:
+        paths: /etc/systemd/system/
+        file_type: directory
+        patterns: '*.wants'
+      register: dir_path
+
+    - name: Delete /etc/systemd/system/*.wants/*
+      find:
+        paths: "{{ item.path }}"
+        file_type: link
+        patterns: '*'
+      with_items: "{{ dir_path.files }}"
+      register: files_to_delete
+
+    - name: delete block
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ files_to_delete.results | map(attribute='files') | list }}"
+
+    - name: Delete /lib/systemd/system/local-fs.target.wants/*
+      find:
+        paths: /lib/systemd/system/local-fs.target.wants/ 
+        file_type: link
+      register: files_to_delete
+
+    - name: delete block
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ files_to_delete.files }}"
+
+    - name: Delete /lib/systemd/system/sockets.target.wants/*udev*
+      find:
+        paths: /lib/systemd/system/sockets.target.wants/
+        file_type: link
+        patterns: '*udev*'
+      register: files_to_delete
+
+    - name: delete block
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ files_to_delete.files }}"
+
+    - name: Delete /lib/systemd/system/sockets.target.wants/*initctl*
+      find:
+        paths: /lib/systemd/system/sockets.target.wants/
+        file_type: link
+        patterns: '*initctl*'
+      register: files_to_delete
+
+    - name: delete block
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ files_to_delete.files }}"
+
+    - name: Delete /lib/systemd/system/basic.target.wants/*
+      find:
+        paths: /lib/systemd/system/basic.target.wants/
+        file_type: link
+      register: basic_target_wants
+
+    - name: delete block
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ basic_target_wants.files }}"
+
+
+    - name: Install Jenkins repository
+      get_url: 
+        dest: /etc/yum.repos.d/jenkins.repo
+        url: https://pkg.jenkins.io/redhat-stable/jenkins.repo
+        validate_certs: no
+
+    - name: import https://pkg.jenkins.io/redhat-stable/jenkins.io.key
+      ansible.builtin.rpm_key:
+        state: present
+        key: https://pkg.jenkins.io/redhat-stable/jenkins.io.key
+        validate_certs: no
+
+    - name: Install java-11-openjdk
+      yum:
+        name: java-11-openjdk
+        state: latest
+
+    - name: Install jenkins
+      yum:
+        name: jenkins
+        state: latest
+
+    - name: Install yum-utils
+      yum:
+        name: yum-utils
+        state: latest
+
+    - name: Install docker-ce repository
+      get_url: 
+        dest: /etc/yum.repos.d/docker-ce.repo
+        url: https://download.docker.com/linux/centos/docker-ce.repo
+        validate_certs: no
+
+    - name: Install docker-client
+      yum:
+        #name: docker-client
+        name: docker-ce-cli
+        state: latest
+
+    - name: Install git
+      yum:
+        name: git
+        state: latest
+
+    - name: Enable jenkins
+      ansible.builtin.systemd:
+        name: jenkins
+        enabled: yes
+        masked: no
+
+- name: Snapshot  base image to create newly configured image
+  hosts: localhost
+  tasks:
+    - name: Commit Docker image
+      command: docker commit "centos-base-image" "centos-jenkins"
+
+- name: Clean Up Docker Containers
+  hosts: localhost
+  tasks:
+    - name: Remove Running Base Image
+      docker_container:
+        container_default_behavior: no_defaults
+        name: centos-base-image
+        state: absent
+        force_kill: yes
